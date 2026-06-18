@@ -1,0 +1,100 @@
+// ZortilWatch — модель даних бекенду.
+// Декларативно; міграції генеруються ЛИШЕ через Prisma (CLAUDE.md, без ручного SQL).
+
+generator client {
+  provider = "prisma-client-js"
+  // glibc + ARM для Oracle Ampere A1; уникаємо musl/Alpine (ризик стека #2).
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Орендар. Багатокористувацька модель: один сервер тримає багато ізольованих акаунтів.
+model Account {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  /// Секрет TOTP (base32). null = 2FA вимкнено (PRD 5.10).
+  totpSecret   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  devices   Device[]
+  groups    Group[]
+  sessions  Session[]
+  auditLogs AuditLog[]
+}
+
+/// Пристрій. publicId — стабільний ~9-значний публічний ідентифікатор для парування,
+/// глобально унікальний у межах сервера (набирається ДО автентифікації).
+model Device {
+  id                    String    @id @default(cuid())
+  publicId              String    @unique
+  accountId             String
+  account               Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  alias                 String?
+  // Автентифікація реєстрації сокета: ID — це публічна адреса маршрутизації, не секрет.
+  clientSecretHash      String?
+  // Хеш постійного пароля безатендантного доступу (одноразовий пароль — лише в пам'яті пристрою).
+  permanentPasswordHash String?
+  /// MAC-адреса для Wake-on-LAN (PRD 5.9): пристрій звітує її, поки онлайн.
+  macAddress            String?
+  /// Остання публічна (WAN) IP, з якої пристрій під'єднувався — щоб знайти помічника
+  /// в ТІЙ САМІЙ мережі, коли пристрій спить.
+  lastWanIp             String?
+  groupId               String?
+  group                 Group?    @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  /// Чорний список ID пультів для ЦЬОГО керованого (PRD 5.10). Порожньо = всі дозволені
+  /// (крім блокованих); якщо allowedIds непорожній — діє ЛИШЕ білий список.
+  blockedIds            String[]  @default([])
+  allowedIds            String[]  @default([])
+  lastSeenAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([accountId])
+  @@index([accountId, groupId])
+}
+
+/// Група адресної книги ("Дім", "Робота", "Клієнти").
+model Group {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  name      String
+  devices   Device[]
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, name])
+  @@index([accountId])
+}
+
+/// Сесія входу в акаунт (refresh-токени, пристрої входу).
+model Session {
+  id          String   @id @default(cuid())
+  accountId   String
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  refreshHash String
+  userAgent   String?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([accountId])
+}
+
+/// Журнал аудиту доступу (хто, коли, з якого пристрою, тривалість) — наповнюється на Етапі 9.
+model AuditLog {
+  id        String    @id @default(cuid())
+  accountId String
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  deviceId  String?
+  event     String
+  fromInfo  String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  @@index([accountId, startedAt])
+}

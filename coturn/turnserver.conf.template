@@ -1,0 +1,57 @@
+# coturn — TURN-ретранслятор ZortilWatch (шаблон).
+# bootstrap.sh підставляє __DOMAIN__ і __TURN_STATIC_AUTH_SECRET__ -> turnserver.conf.
+# Релей — лише запасний канал (E1); E2E збережено (coturn пропускає шифрований DTLS/SRTP).
+
+# ── Ідентичність ──────────────────────────────────────────────────────────
+realm=__DOMAIN__
+server-name=__DOMAIN__
+
+# ── Слухачі ───────────────────────────────────────────────────────────────
+listening-port=3478        # STUN/TURN по UDP і TCP
+tls-listening-port=5349    # TURNS (TLS/DTLS)
+listening-ip=0.0.0.0
+
+# Публічний IP за NAT (Oracle дає 1:1 NAT). Розкоментуйте й підставте:
+# external-ip=<PUBLIC_IP>/<PRIVATE_IP>
+
+# ── Діапазон релей-портів (вузький — менше відкривати у ДВОХ шарах фаєрвола) ─
+min-port=49160
+max-port=49200
+
+# ── Автентифікація: ефемерні REST-обліковки (use-auth-secret) ──────────────
+use-auth-secret
+static-auth-secret=__TURN_STATIC_AUTH_SECRET__
+# НЕ додавайте статичних user= рядків разом із цим режимом.
+
+# ── TLS (TURNS). Увімкніть, коли сертифікати на місці (напр. зі спільного тому Caddy).
+# Шлях у сховищі Caddy залежить від його розкладки — звірте на сервері.
+# cert=/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/__DOMAIN__/__DOMAIN__.crt
+# pkey=/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/__DOMAIN__/__DOMAIN__.key
+no-tlsv1
+no-tlsv1_1
+
+# ── Цілісність ────────────────────────────────────────────────────────────
+fingerprint
+
+# ── Захист від відкритого релею / SSRF: заборона релеїти у приватні діапазони ─
+no-cli
+no-multicast-peers
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=::1
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+
+# ── Квоти (захист безкоштовного egress і слабкого ARM) ─────────────────────
+total-quota=200
+user-quota=6
+# bps-capacity=0           # 0 = без обмеження; напр. 3000000 ~ 3 Мбіт/с на сесію
+
+# ── Логи (зручно для контейнера) ──────────────────────────────────────────
+log-file=stdout
+simple-log

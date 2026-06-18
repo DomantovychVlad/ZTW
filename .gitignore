@@ -1,0 +1,42 @@
+# --- Rust / Cargo ---
+/target/
+**/target/
+# Бінарні артефакти; Cargo.lock для застосунку лишаємо у версіонуванні.
+
+# --- Node / TypeScript ---
+node_modules/
+dist/
+dist-ssr/
+build/
+*.tsbuildinfo
+.npm/
+.eslintcache
+
+# --- Tauri ---
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+
+# --- Артефакти пакування (Етап 11) ---
+/dist-portable/
+
+# --- Середовище та секрети ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Згенеровані конфіги з секретами (з шаблонів) ---
+coturn/turnserver.conf
+
+# --- Тимчасові артефакти дослідження (див. CLAUDE.md) ---
+/.scratch/
+
+# --- ОС та редактори ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp

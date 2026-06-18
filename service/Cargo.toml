@@ -1,0 +1,39 @@
+[package]
+name = "zortilwatch-service"
+description = "Системна служба ZortilWatch (Tier B): керований на екрані входу / secure-desktop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Один .exe, режим обирається аргументом: SCM-служба (без арг), install/uninstall,
+# воркер (--worker). Так само, як RustDesk (вивчено, не копійовано) — план docs/stage4-secure-desktop.md.
+[[bin]]
+name = "zortilwatch-service"
+path = "src/main.rs"
+
+[dependencies]
+# SCM lifecycle (MIT/Apache — проходить ліцензійний фільтр F1).
+windows-service = "0.7"
+# Спільне ядро: DXGI-джерело, H264-енкодер, крипто, чанкінг, str0m-обгортка, сигналінг.
+zortilwatch-core = { path = "../core" }
+# str0m напряму — воркер сам драйвить WebRTC-піра (host=offerer), як приклад e2e_media.
+# Версія/фічі узгоджені з core, щоб типи (Rtc) збігалися.
+str0m = { version = "0.20", default-features = false, features = ["rust-crypto"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_Environment",
+    "Win32_Security",
+    # Крок 4: DXGI Desktop Duplication у воркері (захоплення інтерактивного desktop).
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+] }

@@ -1,0 +1,5 @@
+# Caddy: автоматичний Let's Encrypt для домену + проксі на бекенд.
+# WebSocket-апгрейди (сигналінг) проходять прозоро.
+{$DOMAIN} {
+	reverse_proxy backend:8080
+}

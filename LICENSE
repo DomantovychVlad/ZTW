@@ -1,0 +1,23 @@
+ZortilWatch — Proprietary Software
+Copyright (c) 2026 ZortilWatch. All rights reserved. / Усі права застережено.
+
+This software, its source code, design, and documentation are proprietary and
+confidential. No license, express or implied, is granted to copy, modify,
+distribute, sublicense, or use this software except under a separate written
+agreement with the copyright holder.
+
+Unauthorized copying, distribution, or disclosure is prohibited.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+---
+
+Third-party components.
+This product bundles third-party libraries that remain licensed under their own
+permissive open-source licenses (MIT, Apache-2.0, BSD, ISC, Zlib, BSL-1.0,
+Unicode, CC0, MPL-2.0). Their copyright notices are preserved and reproduced in
+the generated third-party notices. The license policy governing which
+dependencies may be included is documented in docs/licensing.md.
+
+NOTE: replace "ZortilWatch" above with the final legal copyright holder before
+any public distribution or sale.

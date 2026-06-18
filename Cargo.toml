@@ -1,0 +1,14 @@
+# Кореневий Cargo-воркспейс ZortilWatch.
+# Поки один член — core. desktop/src-tauri додається на кроці десктопа.
+
+[workspace]
+resolver = "2"
+members = ["core", "desktop/src-tauri", "web-wasm", "service"]
+# web-wasm збирається лише під wasm32 через wasm-pack — поза дефолтним нативним build/test.
+default-members = ["core", "desktop/src-tauri", "service"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "LicenseRef-Proprietary"
+publish = false

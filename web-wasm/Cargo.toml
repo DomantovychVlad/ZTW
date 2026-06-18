@@ -1,0 +1,28 @@
+# WASM-обгортка чистої крипто/протокольної поверхні ядра для браузерного пульта (Етап 10).
+# Збирається через wasm-pack (--target web); реюзає зовсім ті ж crypto/session/media, що
+# нативний керований, — байтова сумісність протоколу гарантована спільним кодом.
+[package]
+name = "zortilwatch-web-wasm"
+description = "WASM-обгортка крипто/PAKE/медіа ядра ZortilWatch для веб-пульта."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+# Чиста поверхня ядра без нативної мережі/ОС (Шлях A: PAKE через start_with_rng, без getrandom).
+zortilwatch-core = { path = "../core", default-features = false }
+# Браузерний CSPRNG для PAKE: ChaCha20Rng, засіяний 32 байтами з crypto.getRandomValues.
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+serde_json = "1"
+console_error_panic_hook = { version = "0.1", optional = true }
+
+[features]
+default = ["panic-hook"]
+# Людиночитані паніки ядра у консолі браузера (dev-зручність).
+panic-hook = ["dep:console_error_panic_hook"]

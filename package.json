@@ -1,0 +1,25 @@
+{
+  "name": "zortilwatch",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Єдиний інструментальний вхід ZortilWatch: збірка, формат, лінт, ліцензійний фільтр.",
+  "scripts": {
+    "dev:ui": "npm run dev --prefix ui",
+    "build:ui": "npm run build --prefix ui",
+    "typecheck:ui": "npm run typecheck --prefix ui",
+    "lint:ui": "npm run lint --prefix ui",
+    "fmtcheck:ui": "npm run format:check --prefix ui",
+    "build:core": "cargo build --workspace",
+    "fmt:rust": "cargo fmt --all --check",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
+    "bundle:win": "npm run build:ui && tauri build --config desktop/src-tauri/tauri.conf.json",
+    "bundle:portable": "npm run build:ui && cargo build -p zortilwatch-desktop --release && node scripts/pack-portable.mjs",
+    "check:licenses:npm": "license-checker-rseidelsohn --start ui --production --excludePrivatePackages --onlyAllow \"MIT;Apache-2.0;Apache-2.0 WITH LLVM-exception;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;Zlib;BlueOak-1.0.0;BSL-1.0;Unicode-DFS-2016;Unicode-3.0;CC0-1.0;MPL-2.0\"",
+    "check:licenses:rust": "cargo deny check licenses",
+    "check:licenses": "npm run check:licenses:npm && npm run check:licenses:rust"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "license-checker-rseidelsohn": "^5.0.1"
+  }
+}

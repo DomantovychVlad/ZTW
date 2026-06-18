@@ -1,0 +1,33 @@
+# Ліцензійний фільтр F1 для Rust-залежностей — див. docs/licensing.md.
+# Модель cargo-deny: усе, що не в `allow`, — заборонено; крейт без метаданих
+# ліцензії падає автоматично (потрібен явний clarify/exception).
+
+[licenses]
+confidence-threshold = 0.93
+
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+
+# Дозволена, але невживана ліцензія -> попередження (не блокує).
+unused-allowed-license = "warn"
+
+# Наші власні (proprietary) крейти позначені publish = false — пропускаємо.
+private = { ignore = true }
+
+# Уточнення (clarify) та винятки (exceptions) для конкретних крейтів додаються,
+# коли з'являються відповідні залежності. Очікувані на Етапі 2:
+#   ring   = "MIT AND ISC AND OpenSSL"  (+ виняток OpenSSL лише для ring)
+#   webpki = "ISC"                      (clarify з фіксованим хешем LICENSE)

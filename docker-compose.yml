@@ -1,0 +1,61 @@
+# ZortilWatch — самостійний бекенд одним стеком (Етап 1).
+# Підняти: ./bootstrap.sh (генерує секрети + рендерить coturn + up).
+# Caddy завершує TLS для веб/API/443; coturn робить свій TLS на 5349/443 окремо.
+
+services:
+  caddy: # TLS-термінація + проксі для веб/API/WS-сигналінгу
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # ВАЖЛИВО зберігати: сертифікати/ключі/ACME-акаунт
+      - caddy_config:/config
+    depends_on: [backend]
+
+  backend: # Node/TS: rendezvous + сигналінг + акаунти (один процес)
+    build: ./server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      DATABASE_URL: postgresql://zortil:${POSTGRES_PASSWORD}@postgres:5432/zortil?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+      TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET}
+      TURN_REALM: ${DOMAIN}
+      TURN_HOST: ${DOMAIN}
+    expose: ["8080"] # лише всередині мережі; назовні — через Caddy
+    depends_on:
+      postgres:
+        condition: service_healthy # не стартувати раніше за БД
+
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zortil
+      POSTGRES_DB: zortil
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zortil -d zortil"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  coturn: # TURN-ретранслятор — ГОСТЬОВА мережа (Docker погано тримає великі діапазони UDP)
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - caddy_data:/data:ro # доступ до сертифікатів Caddy для TURNS (за потреби)
+    command: ["-c", "/etc/coturn/turnserver.conf"]
+    depends_on: [caddy]
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
