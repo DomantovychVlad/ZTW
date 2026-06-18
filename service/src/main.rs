@@ -1102,6 +1102,7 @@ mod svc {
             let mut last_rebind = Instant::now() - Duration::from_secs(1);
             let mut active_mon = 0u32;
             send_monitors(&mut sealer, &mut chunker, &mut queue, active_mon); // показати список у пульті
+            let mons = monitors_dxgi(); // кеш геометрії моніторів — для адресної інжекції миші
             let mut blanker: Option<Blanker> = None; // затемнення (PRD 5.10), не переживає сесію
             let mut input_locked = false; // блок фізичного вводу (BlockInput)
 
@@ -1157,7 +1158,14 @@ mod svc {
                                     );
                                 }
                                 other => {
-                                    input::inject(&other);
+                                    // Мишу мапимо на АКТИВНИЙ монітор (VIRTUALDESK), щоб
+                                    // керування йшло на той екран, що показує захоплення.
+                                    match mons.iter().find(|m| m.index == active_mon) {
+                                        Some(m) => {
+                                            input::inject_on_monitor(&other, m.x, m.y, m.width, m.height)
+                                        }
+                                        None => input::inject(&other),
+                                    }
                                     injected += 1;
                                     if injected == 1 || injected.is_multiple_of(200) {
                                         super::log_to(

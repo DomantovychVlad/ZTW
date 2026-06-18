@@ -59,7 +59,7 @@ pub fn to_pixel(normalized: f32, dimension: u32) -> i32 {
 }
 
 #[cfg(windows)]
-pub use win::{block_physical, cursor_pos, inject, lock_workstation, screen_size};
+pub use win::{block_physical, cursor_pos, inject, inject_on_monitor, lock_workstation, screen_size};
 
 /// Інжекція вводу на керованому пристрої (Windows, SendInput).
 #[cfg(windows)]
@@ -70,11 +70,12 @@ mod win {
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
         KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
         MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
-        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT,
-        MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
+        GetCursorPos, GetSystemMetrics, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
 
     fn send(input: INPUT) {
@@ -148,6 +149,37 @@ mod win {
             }
             // Керівні повідомлення медіа-циклу/файлів/буфера — НЕ ввід; інжекції не мають.
             _ => {}
+        }
+    }
+
+    /// Як [`inject`], але рух миші мапиться на АКТИВНИЙ монітор `(left,top,width,height)`
+    /// у пікселях віртуального робочого стола, з `MOUSEEVENTF_VIRTUALDESK` — щоб курсор
+    /// ішов на той екран, який показує захоплення (мультимонітор), а не лише на основний.
+    /// Кнопки/скрол/клавіші — без зміни (делегуються в [`inject`]).
+    pub fn inject_on_monitor(event: &InputEvent, left: i32, top: i32, width: u32, height: u32) {
+        if let InputEvent::MouseMove { x, y } = *event {
+            unsafe {
+                let (vx, vy) = (
+                    GetSystemMetrics(SM_XVIRTUALSCREEN),
+                    GetSystemMetrics(SM_YVIRTUALSCREEN),
+                );
+                let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
+                let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
+                // нормалізовані 0..1 -> піксель на активному моніторі
+                let px = left + (x.clamp(0.0, 1.0) * width.saturating_sub(1) as f32).round() as i32;
+                let py = top + (y.clamp(0.0, 1.0) * height.saturating_sub(1) as f32).round() as i32;
+                // піксель -> 0..65535 над усім віртуальним робочим столом
+                let ax = (((px - vx) as f32) / ((vw - 1).max(1) as f32) * 65535.0).round() as i32;
+                let ay = (((py - vy) as f32) / ((vh - 1).max(1) as f32) * 65535.0).round() as i32;
+                send(mouse(
+                    MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                    ax,
+                    ay,
+                    0,
+                ));
+            }
+        } else {
+            inject(event);
         }
     }
 

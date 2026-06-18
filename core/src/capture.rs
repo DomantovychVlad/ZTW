@@ -111,6 +111,10 @@ mod wgc {
         pub width: u32,
         pub height: u32,
         pub is_primary: bool,
+        /// Лівий-верхній кут монітора на ВІРТУАЛЬНОМУ робочому столі (для абсолютної
+        /// інжекції миші на потрібний екран). 0,0 для WGC (Tier A position — окремо).
+        pub x: i32,
+        pub y: i32,
     }
 
     /// Перелік моніторів. Порожній — якщо перелік недоступний.
@@ -132,6 +136,8 @@ mod wgc {
                             width: m.width().unwrap_or(0),
                             height: m.height().unwrap_or(0),
                             is_primary: m.index().map(|x| x == primary_idx).unwrap_or(false),
+                            x: 0, // WGC не дає позицію тривіально; Tier A-мультимонітор — окремо
+                            y: 0,
                         }
                     })
                     .collect()
@@ -453,6 +459,8 @@ pub mod dxgi {
                     width: (r.right - r.left).max(0) as u32,
                     height: (r.bottom - r.top).max(0) as u32,
                     is_primary: r.left == 0 && r.top == 0,
+                    x: r.left,
+                    y: r.top,
                 });
             }
         }
