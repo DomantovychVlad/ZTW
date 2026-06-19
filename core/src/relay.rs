@@ -69,7 +69,7 @@ pub mod turn {
     use stun_codec::rfc5766::attributes::{
         Data, Lifetime, RequestedTransport, XorPeerAddress, XorRelayAddress,
     };
-    use stun_codec::rfc5766::methods::{ALLOCATE, CREATE_PERMISSION, DATA, SEND};
+    use stun_codec::rfc5766::methods::{ALLOCATE, CREATE_PERMISSION, DATA, REFRESH, SEND};
     use stun_codec::{Message, MessageClass, MessageDecoder, MessageEncoder, TransactionId};
 
     stun_codec::define_attribute_enums!(
@@ -135,6 +135,9 @@ pub mod turn {
         password: String,
         realm: Realm,
         nonce: Nonce,
+        /// Час життя алокації, виданий сервером (Lifetime у відповіді Allocate; дефолт 600с).
+        /// Рефрешити треба раніше за це, інакше coturn звільнить алокацію й relay помре.
+        lifetime: Duration,
     }
 
     impl TurnClient {
@@ -195,6 +198,11 @@ pub mod turn {
                 .get_attribute::<XorRelayAddress>()
                 .ok_or_else(|| TurnError("no XOR-RELAYED-ADDRESS".into()))?
                 .address();
+            // Час життя алокації (для розкладу Refresh); дефолт RFC — 600с.
+            let lifetime = resp2
+                .get_attribute::<Lifetime>()
+                .map(|l| l.lifetime())
+                .unwrap_or_else(|| Duration::from_secs(600));
 
             Ok(Self {
                 server,
@@ -203,7 +211,41 @@ pub mod turn {
                 password: password.to_string(),
                 realm,
                 nonce,
+                lifetime,
             })
+        }
+
+        /// Час життя алокації в секундах (для розрахунку інтервалу Refresh).
+        pub fn lifetime_secs(&self) -> u32 {
+            self.lifetime.as_secs().min(u32::MAX as u64) as u32
+        }
+
+        /// Оновити збережений nonce (після 438 Stale Nonce від сервера).
+        pub fn set_nonce(&mut self, nonce: String) {
+            if let Ok(n) = Nonce::new(nonce) {
+                self.nonce = n;
+            }
+        }
+
+        /// Закодувати автентифікований REFRESH (RFC 5766 §7): подовжує алокацію ще на
+        /// `lifetime`. Повертає байти для fire-and-forget відправлення; відповідь
+        /// (успіх або 438) обробляє цикл сесії через `parse_from_server`.
+        pub fn refresh_request_bytes(&self) -> Result<Vec<u8>, TurnError> {
+            let uname = Username::new(self.username.clone()).map_err(err)?;
+            let mut req = Message::<TurnAttr>::new(MessageClass::Request, REFRESH, txid());
+            req.add_attribute(TurnAttr::Lifetime(Lifetime::new(self.lifetime).map_err(err)?));
+            req.add_attribute(TurnAttr::Username(uname.clone()));
+            req.add_attribute(TurnAttr::Realm(self.realm.clone()));
+            req.add_attribute(TurnAttr::Nonce(self.nonce.clone()));
+            let mi = MessageIntegrity::new_long_term_credential(
+                &req,
+                &uname,
+                &self.realm,
+                &self.password,
+            )
+            .map_err(err)?;
+            req.add_attribute(TurnAttr::MessageIntegrity(mi));
+            MessageEncoder::new().encode_into_bytes(req).map_err(err)
         }
 
         /// CreatePermission для relayed-адреси піра — дозволяє coturn релеїти трафік між
@@ -267,11 +309,14 @@ pub mod turn {
     pub enum TurnInbound {
         /// Data-indication: дані від піра (`peer` — його relayed-адреса).
         Data { peer: SocketAddr, payload: Vec<u8> },
-        /// Інше (відповіді на Allocate/CreatePermission/Refresh тощо) — ігноруємо.
+        /// 438 Stale Nonce — сервер провернув nonce; несе свіжий для повтору запиту.
+        StaleNonce { nonce: String },
+        /// Інше (успішні відповіді Allocate/CreatePermission/Refresh тощо) — ігноруємо.
         Other,
     }
 
-    /// Розібрати датаграму від TURN-сервера: Data-indication -> (peer, payload), решта -> Other.
+    /// Розібрати датаграму від TURN-сервера: Data-indication -> (peer, payload),
+    /// 438 Stale Nonce -> новий nonce, решта -> Other.
     pub fn parse_from_server(buf: &[u8]) -> Result<TurnInbound, TurnError> {
         let msg = MessageDecoder::<TurnAttr>::new()
             .decode_from_bytes(buf)
@@ -288,6 +333,16 @@ pub mod turn {
                 .data()
                 .to_vec();
             return Ok(TurnInbound::Data { peer, payload });
+        }
+        // 438 Stale Nonce на наш Refresh/CreatePermission — підхопити свіжий nonce.
+        if msg.class() == MessageClass::ErrorResponse
+            && msg.get_attribute::<ErrorCode>().map(|e| e.code()) == Some(438)
+        {
+            if let Some(n) = msg.get_attribute::<Nonce>() {
+                return Ok(TurnInbound::StaleNonce {
+                    nonce: n.value().to_string(),
+                });
+            }
         }
         Ok(TurnInbound::Other)
     }
@@ -343,6 +398,21 @@ pub mod turn {
                 parse_from_server(&bytes).unwrap(),
                 TurnInbound::Other
             ));
+        }
+
+        #[test]
+        fn parse_stale_nonce_extracts_fresh_nonce() {
+            let mut m =
+                Message::<TurnAttr>::new(MessageClass::ErrorResponse, REFRESH, txid());
+            m.add_attribute(TurnAttr::ErrorCode(
+                ErrorCode::new(438, "Stale Nonce".to_string()).unwrap(),
+            ));
+            m.add_attribute(TurnAttr::Nonce(Nonce::new("fresh-nonce-xyz".to_string()).unwrap()));
+            let bytes = MessageEncoder::new().encode_into_bytes(m).unwrap();
+            match parse_from_server(&bytes).unwrap() {
+                TurnInbound::StaleNonce { nonce } => assert_eq!(nonce, "fresh-nonce-xyz"),
+                other => panic!("expected StaleNonce, got {other:?}"),
+            }
         }
     }
 }

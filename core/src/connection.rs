@@ -141,27 +141,44 @@ fn drain(
     }
 }
 
-fn recv_one(rtc: &mut Rtc, sock: &UdpSocket, my_addr: SocketAddr, relay: Relay) {
+fn recv_one(
+    rtc: &mut Rtc,
+    sock: &UdpSocket,
+    my_addr: SocketAddr,
+    relay: Relay,
+    turn: Option<&mut TurnClient>,
+) {
     let mut buf = [0u8; 2048];
     match sock.recv_from(&mut buf) {
         Ok((n, src)) => {
-            // Дані від coturn -> розгорнути Data-indication й подати як від піра.
+            // Пакети від coturn: Data-indication -> подати як від піра; 438 -> оновити nonce.
             if let (Some(ts), Some(mr)) = (relay.turn_server, relay.my_relayed) {
                 if src == ts {
-                    if let Ok(TurnInbound::Data { peer, payload }) =
-                        turn::parse_from_server(&buf[..n])
-                    {
-                        if let Ok(contents) = payload[..].try_into() {
-                            let _ = rtc.handle_input(Input::Receive(
-                                Instant::now(),
-                                Receive {
-                                    proto: Protocol::Udp,
-                                    source: peer,
-                                    destination: mr,
-                                    contents,
-                                },
-                            ));
+                    match turn::parse_from_server(&buf[..n]) {
+                        Ok(TurnInbound::Data { peer, payload }) => {
+                            if let Ok(contents) = payload[..].try_into() {
+                                let _ = rtc.handle_input(Input::Receive(
+                                    Instant::now(),
+                                    Receive {
+                                        proto: Protocol::Udp,
+                                        source: peer,
+                                        destination: mr,
+                                        contents,
+                                    },
+                                ));
+                            }
                         }
+                        // coturn провернув nonce — підхопити свіжий і одразу повторити Refresh,
+                        // щоб алокація не згасла (інакше relay-сесія тихо вмирає за ~lifetime).
+                        Ok(TurnInbound::StaleNonce { nonce }) => {
+                            if let Some(tc) = turn {
+                                tc.set_nonce(nonce);
+                                if let Ok(bytes) = tc.refresh_request_bytes() {
+                                    let _ = sock.send_to(&bytes, tc.server);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                     return;
                 }
@@ -184,6 +201,26 @@ fn recv_one(rtc: &mut Rtc, sock: &UdpSocket, my_addr: SocketAddr, relay: Relay) 
                 || e.kind() == std::io::ErrorKind::TimedOut
                 || e.kind() == std::io::ErrorKind::ConnectionReset => {}
         Err(_) => {}
+    }
+}
+
+/// Інтервал між TURN Refresh = половина виданого lifetime (мін. 60с). None без relay.
+fn turn_refresh_interval(est: &Established) -> Option<Duration> {
+    est.turn_client
+        .as_ref()
+        .map(|c| Duration::from_secs((c.lifetime_secs() / 2).max(60) as u64))
+}
+
+/// Періодичний TURN Refresh (fire-and-forget): подовжує relay-алокацію, щоб довга сесія
+/// не вмерла на ~lifetime coturn. Відповідь (успіх/438) обробляє recv_one. No-op без relay.
+fn maybe_refresh_turn(est: &Established, every: Option<Duration>, last: &mut Instant) {
+    if let (Some(iv), Some(tc)) = (every, est.turn_client.as_ref()) {
+        if last.elapsed() >= iv {
+            *last = Instant::now();
+            if let Ok(bytes) = tc.refresh_request_bytes() {
+                let _ = est.sock.send_to(&bytes, tc.server);
+            }
+        }
     }
 }
 
@@ -264,9 +301,13 @@ struct Established {
     chan: ChannelId,
     key: [u8; 32],
     relay: Relay,
+    /// TURN-клієнт лишається живим на час сесії — для періодичного Refresh алокації
+    /// (None для прямих/STUN-сесій без relay).
+    turn_client: Option<TurnClient>,
 }
 
 /// Драйв str0m + PAKE до підтвердження; не-PAKE-блоби буферизуються у `deferred`.
+#[allow(clippy::too_many_arguments)] // приватний хелпер; усі аргументи — окремі сутності сесії
 fn drive_until_confirmed(
     mut rtc: Rtc,
     sock: UdpSocket,
@@ -275,6 +316,7 @@ fn drive_until_confirmed(
     own_fp: String,
     peer_fp: String,
     relay: Relay,
+    turn_client: Option<TurnClient>,
 ) -> Result<(Established, Vec<Vec<u8>>), String> {
     sock.set_read_timeout(Some(Duration::from_millis(50)))
         .map_err(|e| e.to_string())?;
@@ -295,6 +337,7 @@ fn drive_until_confirmed(
                         sock,
                         my_addr,
                         relay,
+                        turn_client,
                     },
                     deferred,
                 ));
@@ -331,7 +374,7 @@ fn drive_until_confirmed(
                 Err(_) => deferred.push(raw),
             }
         }
-        recv_one(&mut rtc, &sock, my_addr, relay);
+        recv_one(&mut rtc, &sock, my_addr, relay, None); // рукостискання <30с << lifetime — Refresh не треба
         rtc.handle_input(Input::Timeout(Instant::now()))
             .map_err(|e| e.to_string())?;
     }
@@ -472,9 +515,9 @@ impl Controller {
             }
         }
 
-        let (est, deferred) =
-            drive_until_confirmed(rtc, sock, my_addr, password, own_fp, peer_fp, relay)?;
-        drop(turn_client); // дозвіл/алокація лишаються на coturn; рефреш не потрібен для короткої сесії
+        let (est, deferred) = drive_until_confirmed(
+            rtc, sock, my_addr, password, own_fp, peer_fp, relay, turn_client,
+        )?;
         let key = est.key;
 
         let (frames_tx, frames_rx) = channel::<Vec<u8>>();
@@ -551,8 +594,11 @@ fn controller_loop(
     let mut inbox = deferred;
     // Вихідна черга з backpressure (SCTP): файлові кадри не губляться при заторі.
     let mut out: VecDeque<Vec<u8>> = VecDeque::new();
+    let refresh_every = turn_refresh_interval(&est);
+    let mut refreshed_at = Instant::now();
 
     while !stop.load(Ordering::Relaxed) && est.rtc.is_alive() {
+        maybe_refresh_turn(&est, refresh_every, &mut refreshed_at);
         if !drain(&mut est.rtc, &est.sock, &mut chan, &mut inbox, relay) {
             break;
         }
@@ -603,7 +649,7 @@ fn controller_loop(
         if !drain(&mut est.rtc, &est.sock, &mut chan, &mut inbox, relay) {
             break;
         }
-        recv_one(&mut est.rtc, &est.sock, est.my_addr, relay);
+        recv_one(&mut est.rtc, &est.sock, est.my_addr, relay, est.turn_client.as_mut());
         let _ = est.rtc.handle_input(Input::Timeout(Instant::now()));
     }
     // Чисте завершення: BYE по каналу (пір миттєво завершує цикл, не чекаючи ICE-таймаута)
@@ -1034,10 +1080,10 @@ fn establish_managed(
         }
     }
 
-    let result = drive_until_confirmed(rtc, sock, my_addr, password, own_fp, peer_fp, relay)
-        .map_err(|_| ServeErr::Session);
-    drop(turn_client); // дозвіл/алокація лишаються на coturn; рефреш не потрібен для короткої сесії
-    result
+    drive_until_confirmed(
+        rtc, sock, my_addr, password, own_fp, peer_fp, relay, turn_client,
+    )
+    .map_err(|_| ServeErr::Session)
 }
 
 /// Стелі якості від пульта (PRD 5.5; D1 — кооперативні стелі, не жорсткі перекриття).
@@ -1120,6 +1166,8 @@ fn managed_loop(
     let mut chunker = Chunker::new(DEFAULT_MAX_PAYLOAD);
     let mut queue: VecDeque<Vec<u8>> = VecDeque::new();
     let relay = est.relay;
+    let refresh_every = turn_refresh_interval(&est);
+    let mut refreshed_at = Instant::now();
 
     let mut capture_pair = match capture::start_primary() {
         Ok(c) => Some(c),
@@ -1166,6 +1214,7 @@ fn managed_loop(
     let mut input_locked = false;
 
     while !stop.load(Ordering::Relaxed) && est.rtc.is_alive() {
+        maybe_refresh_turn(&est, refresh_every, &mut refreshed_at);
         if !drain(&mut est.rtc, &est.sock, &mut chan, &mut inbox, relay) {
             break;
         }
@@ -1508,7 +1557,7 @@ fn managed_loop(
         if !drain(&mut est.rtc, &est.sock, &mut chan, &mut inbox, relay) {
             break;
         }
-        recv_one(&mut est.rtc, &est.sock, est.my_addr, relay);
+        recv_one(&mut est.rtc, &est.sock, est.my_addr, relay, est.turn_client.as_mut());
         let _ = est.rtc.handle_input(Input::Timeout(Instant::now()));
     }
     // Безпека: затемнення і блок вводу НІКОЛИ не переживають сесію (людина за
