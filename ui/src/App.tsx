@@ -33,6 +33,22 @@ function loadJSON<T>(key: string): T | null {
   }
 }
 
+/** Зрозуміле повідомлення для помилки підключення (коди сервера + транспортні збої). */
+function humanConnectError(raw: string): string {
+  const m = raw.toLowerCase();
+  if (m.includes("rate_limited"))
+    return "Забагато спроб підключення. Зачекайте хвилину й спробуйте знову.";
+  if (m.includes("offline")) return "Пристрій зараз офлайн.";
+  if (m.includes("busy")) return "Пристрій зайнятий — досягнуто ліміту одночасних підключень.";
+  if (m.includes("forbidden")) return "Підключення відхилено: вас заблоковано або керований відмовив.";
+  if (m.includes("not_found")) return "Пристрій із таким ID не знайдено.";
+  if (m.includes("pake") || m.includes("timeout"))
+    return "Не вдалося підтвердити пароль вчасно — перевірте пароль або підтвердження на керованому.";
+  if (m.includes("ice") || m.includes("dtls") || m.includes("websocket"))
+    return "Не вдалося встановити з'єднання (мережа або NAT). Спробуйте ще раз.";
+  return raw;
+}
+
 /** Чи містить Annex-B буфер NAL заданого типу (7=SPS, 5=IDR). */
 function hasNal(buf: Uint8Array, type: number): boolean {
   for (let i = 0; i + 3 < buf.length; ) {
@@ -372,6 +388,15 @@ export function App() {
     setQMode("auto");
     setBlank(false);
     setInputLock(false);
+    // Скинути стан попередньої сесії, щоб файли/передачі/буфер не протекли в нову.
+    setFilesOpen(false);
+    setLocalL(null);
+    setRemoteL(null);
+    setLocalSel("");
+    setRemoteSel("");
+    setXfers({});
+    setClipSync(true);
+    lastClipRef.current = "";
     try {
       // Разовий код вводять із чужого екрана — нормалізуємо (регістр/пробіли/дефіси).
       const pw =
@@ -388,7 +413,7 @@ export function App() {
       setSession(s);
       setTargetId(target);
     } catch (e) {
-      setConnectError((e as Error).message);
+      setConnectError(humanConnectError((e as Error).message));
     } finally {
       setConnecting(false);
     }

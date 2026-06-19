@@ -137,7 +137,7 @@ export function AddressBook(props: {
     const ids = blockedText
       .split(/[\s,;]+/)
       .map((s) => s.trim())
-      .filter((s) => /^\d{9}$/.test(s));
+      .filter((s) => /^[1-9]\d{8}$/.test(s)); // ID-простір: 9 цифр, перша не нуль
     try {
       await api.setDeviceLists(props.server, props.token, props.selfId, ids, []);
       setSecMsg(`Чорний список збережено (${ids.length} ID).`);

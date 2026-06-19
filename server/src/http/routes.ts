@@ -31,10 +31,12 @@ const TotpDisable = z.object({ code: z.string().max(16) });
 
 const NewDevice = z.object({ alias: z.string().max(120).optional() });
 const GroupName = z.object({ name: z.string().min(1).max(80) });
+// ID-простір збігається з generateDeviceId/protocol: рівно 9 цифр, перша не нуль.
+const DEVICE_ID_RE = /^[1-9]\d{8}$/;
 const DevicePatch = z.object({
   groupId: z.string().min(1).nullable().optional(),
-  blockedIds: z.array(z.string().regex(/^\d{9}$/)).max(200).optional(),
-  allowedIds: z.array(z.string().regex(/^\d{9}$/)).max(200).optional(),
+  blockedIds: z.array(z.string().regex(DEVICE_ID_RE)).max(200).optional(),
+  allowedIds: z.array(z.string().regex(DEVICE_ID_RE)).max(200).optional(),
 });
 
 export function registerRoutes(app: FastifyInstance, registry: Registry): void {
