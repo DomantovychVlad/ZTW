@@ -37,10 +37,14 @@ export function findDeviceByPublicId(publicId: string) {
   return prisma.device.findUnique({ where: { publicId } });
 }
 
-/** Зберегти WoL-дані пристрою на реєстрації (PRD 5.9): MAC (якщо звітнуто) + остання WAN-IP.
+/** Зберегти дані пристрою на реєстрації: lastSeenAt (адресна книга показує його як
+ *  "останній контакт" для офлайн-пристроїв) + WoL (PRD 5.9): MAC (якщо звітнуто) + WAN-IP.
  *  Не чіпає MAC, якщо його не передано (щоб controller-реєстрація не стирала host-MAC). */
 export function updateDeviceWol(publicId: string, mac: string | undefined, wanIp: string | null) {
-  const data: { macAddress?: string; lastWanIp?: string | null } = { lastWanIp: wanIp };
+  const data: { macAddress?: string; lastWanIp?: string | null; lastSeenAt: Date } = {
+    lastWanIp: wanIp,
+    lastSeenAt: new Date(),
+  };
   if (mac) data.macAddress = mac;
   return prisma.device.update({ where: { publicId }, data }).catch(() => undefined);
 }

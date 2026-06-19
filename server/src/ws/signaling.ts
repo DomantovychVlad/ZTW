@@ -5,11 +5,15 @@ import { findDeviceByPublicId, updateDeviceWol } from "../db/devices";
 import { writeAudit } from "../db/audit";
 import { verifyClientSecret } from "../auth/secrets";
 import { mintTurnCredentials } from "../lib/turn";
+import { RateLimiter } from "../lib/ratelimit";
 import { ClientMessage } from "../signaling/protocol";
 import type { Connection } from "../signaling/registry";
 import { Registry } from "../signaling/registry";
 
 const HEARTBEAT_MS = 30_000;
+// Антиперебір ID: один автентифікований пульт — не більше 20 запитів на з'єднання за 60с.
+const CONNECT_LIMIT = 20;
+const CONNECT_WINDOW_MS = 60_000;
 
 function iceServersFor(deviceId: string) {
   const c = mintTurnCredentials({
@@ -34,6 +38,9 @@ export function registerSignaling(app: FastifyInstance): Registry {
     iceServersFor,
     onSessionStart: (s) => audit("session_start", s.hostId, s.controllerId),
     onSessionEnd: (s) => audit("session_end", s.hostId, s.controllerId),
+  });
+  const connectLimiter = new RateLimiter(CONNECT_LIMIT, CONNECT_WINDOW_MS, {
+    enabled: env.NODE_ENV !== "test", // у тестах вимкнено; логіку покрито ratelimit.test.ts
   });
   const alive = new WeakSet<WebSocket>();
 
@@ -100,21 +107,38 @@ export function registerSignaling(app: FastifyInstance): Registry {
           conn.send({ v: 1, type: "presence_state", entries: registry.presence(msg.ids), rid: msg.rid });
           break;
         case "connect_request": {
+          // Антиперебір ID: обмежуємо частоту запитів на з'єднання від одного пульта.
+          const rl = connectLimiter.check(deviceId);
+          if (!rl.allowed) {
+            conn.send({
+              v: 1,
+              type: "connect_err",
+              code: "rate_limited",
+              rid: msg.rid,
+              retryAfter: rl.retryAfterSec,
+            });
+            break;
+          }
           // Білий/чорний списки керованого (PRD 5.10). Уніфіковане forbidden — без оракулів.
+          // Збій БД => fail-CLOSED: ACL — контроль безпеки; не можемо перевірити => відмова
+          // (інакше блокований пульт пролізе під час недоступності БД).
+          let aclOk = true;
           try {
             const target = await findDeviceByPublicId(msg.targetId);
             if (target) {
               const blocked = target.blockedIds.includes(deviceId);
               const allowlisted =
                 target.allowedIds.length === 0 || target.allowedIds.includes(deviceId);
-              if (blocked || !allowlisted) {
-                conn.send({ v: 1, type: "connect_err", code: "forbidden", rid: msg.rid });
-                audit("connect_denied_acl", msg.targetId, deviceId);
-                break;
-              }
+              aclOk = !blocked && allowlisted;
             }
           } catch (err) {
-            app.log.warn({ err }, "acl lookup failed"); // не блокуємо потік через збій БД
+            app.log.warn({ err }, "acl lookup failed");
+            aclOk = false; // fail-closed
+          }
+          if (!aclOk) {
+            conn.send({ v: 1, type: "connect_err", code: "forbidden", rid: msg.rid });
+            audit("connect_denied_acl", msg.targetId, deviceId);
+            break;
           }
           const res = registry.requestConnect(deviceId, clientKind, msg.targetId, msg.passwordKind);
           if (!res.ok && res.code) {

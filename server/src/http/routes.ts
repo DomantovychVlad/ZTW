@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { env } from "../config";
 import { hashPassword, verifyPassword } from "../auth/passwords";
@@ -11,7 +11,14 @@ import { assignDeviceGroup, createGroup, deleteGroup, listGroups, renameGroup } 
 import { listAudit } from "../db/audit";
 import { generateTotpSecret, totpUri, verifyTotp } from "../auth/totp";
 import { mintTurnCredentials } from "../lib/turn";
+import { RateLimiter } from "../lib/ratelimit";
 import type { Registry } from "../signaling/registry";
+
+// Антибрутфорс за IP: логін (перебір пароля) і реєстрація (масове створення акаунтів).
+// У тестах вимкнено (вони легітимно б'ють з однієї IP); логіку покрито ratelimit.test.ts.
+const rlOn = { enabled: env.NODE_ENV !== "test" };
+const loginLimiter = new RateLimiter(10, 60_000, rlOn);
+const signupLimiter = new RateLimiter(5, 10 * 60_000, rlOn);
 
 const Credentials = z.object({
   email: z.string().email(),
@@ -31,8 +38,14 @@ const DevicePatch = z.object({
 });
 
 export function registerRoutes(app: FastifyInstance, registry: Registry): void {
+  // 429 із заголовком Retry-After, коли перевищено вікно лімітера.
+  const tooMany = (reply: FastifyReply, retryAfterSec: number) =>
+    reply.code(429).header("Retry-After", String(retryAfterSec)).send({ error: "rate_limited" });
+
   // Реєстрація акаунта.
   app.post("/accounts", async (req, reply) => {
+    const rl = signupLimiter.check(req.ip);
+    if (!rl.allowed) return tooMany(reply, rl.retryAfterSec);
     const { email, password } = Credentials.parse(req.body);
     if (await findAccountByEmail(email)) {
       return reply.code(409).send({ error: "email_taken" });
@@ -44,6 +57,8 @@ export function registerRoutes(app: FastifyInstance, registry: Registry): void {
 
   // Вхід (+ другий фактор, якщо ввімкнено — PRD 5.10).
   app.post("/sessions", async (req, reply) => {
+    const rl = loginLimiter.check(req.ip);
+    if (!rl.allowed) return tooMany(reply, rl.retryAfterSec);
     const { email, password, totpCode } = Credentials.parse(req.body);
     const acc = await findAccountByEmail(email);
     if (!acc || !(await verifyPassword(acc.passwordHash, password))) {
