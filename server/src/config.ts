@@ -21,6 +21,9 @@ export const env = cleanEnv(process.env, {
   TURN_REALM: str({ default: "zortilwatch.local" }),
   TURN_HOST: str({ default: "localhost" }),
   TURN_TTL_SECONDS: num({ default: 12 * 3600 }),
+  // Дозволені CORS-origin'и (через кому). Порожньо = дозволяти будь-який (API на
+  // Bearer-токенах без кук, тож це не CSRF-вектор; список — захист у глибину для проду).
+  CORS_ORIGINS: str({ default: "" }),
 });
 
 // Fail-fast у проді: дев-дефолти секретів = підробні токени/TURN-обліковки для всіх.

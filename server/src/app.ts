@@ -27,9 +27,16 @@ export async function buildServer(): Promise<FastifyInstance> {
     return reply.code(500).send({ error: "internal" });
   });
 
-  // CORS для браузерних/webview-клієнтів (API на Bearer-токенах, без кук). У проді — обмежити origin.
+  // CORS для браузерних/webview-клієнтів (API на Bearer-токенах, без кук).
+  // CORS_ORIGINS (через кому) звужує дозволені origin'и у проді; порожньо = будь-який.
   // methods явно: дефолт @fastify/cors (GET,HEAD,POST) ріже префлайт PATCH/DELETE адресної книги.
-  await app.register(cors, { origin: true, methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"] });
+  const allowedOrigins = env.CORS_ORIGINS.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  await app.register(cors, {
+    origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+    methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"],
+  });
 
   app.get("/health", async () => ({ status: "ok", service: "zortilwatch-server" }));
 
