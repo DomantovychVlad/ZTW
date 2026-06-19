@@ -1241,6 +1241,20 @@ mod svc {
             if input_locked {
                 let _ = input::block_physical(false);
             }
+            // Симетрично з Tier A (managed_loop): чистий BYE пульту, щоб він одразу бачив
+            // кінець сесії й не чекав ICE-таймаут (no-op, якщо канал уже мертвий —
+            // напр. пульт відпав першим). Дренаж кілька разів — щоб BYE справді пішов.
+            if let Some(mut ch) = est.rtc.channel(est.chan) {
+                let _ = ch.write(true, SESSION_BYE);
+            }
+            for _ in 0..5 {
+                drain(&mut est.rtc, &est.sock, &mut chan_opt, &mut inbox);
+                if est.rtc.handle_input(Input::Timeout(Instant::now())).is_err() {
+                    break;
+                }
+            }
+            est.rtc.disconnect();
+            drain(&mut est.rtc, &est.sock, &mut chan_opt, &mut inbox);
             cap.stop();
             let _ = sc.send(&ClientMsg::session_close(session_id, Some("done")));
             Ok(())

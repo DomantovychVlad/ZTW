@@ -14,6 +14,15 @@ import init, {
 const PROTOCOL_VERSION = 1;
 // Покриває атендантне підтвердження на керованому (до 30с) + PAKE/встановлення.
 const PAKE_TIMEOUT_MS = 45_000;
+// Маркер чистого завершення сесії від керованого (= core::connection SESSION_BYE = b"ZW-BYE-1").
+// Шлеться сирим (не чанк, не шифр), тож звіряємо побайтно ДО передачі в reassembler.
+const SESSION_BYE = new Uint8Array([0x5a, 0x57, 0x2d, 0x42, 0x59, 0x45, 0x2d, 0x31]);
+
+function isSessionBye(b: Uint8Array): boolean {
+  if (b.length !== SESSION_BYE.length) return false;
+  for (let i = 0; i < b.length; i++) if (b[i] !== SESSION_BYE[i]) return false;
+  return true;
+}
 
 let wasmInit: Promise<unknown> | null = null;
 /** Ліниво ініціалізувати WASM-модуль (один раз). */
@@ -150,11 +159,14 @@ export function createWebPlatform(): Platform {
         }
       };
       const fail = (msg: string) => {
+        const wasSettled = settled;
         if (!settled) {
           settled = true;
           rejectConn(new Error(msg));
         }
         cleanup();
+        // Сесія вже була живою — це не відмова connect(), а кінець сесії: сповістити App.
+        if (wasSettled) opts.onClose?.(msg);
       };
 
       const timer = setTimeout(() => fail("PAKE timeout"), PAKE_TIMEOUT_MS);
@@ -181,6 +193,10 @@ export function createWebPlatform(): Platform {
 
       // ── Одне розшифроване відео: зібрати чанки → розшифрувати → видати кадр ──
       const onMedia = (bytes: Uint8Array) => {
+        if (isSessionBye(bytes)) {
+          fail("сесію завершено керованим"); // чисте завершення: одразу в книгу
+          return;
+        }
         const sealed = reasm.push(bytes); // Uint8Array | undefined (повний блоб AU)
         if (!sealed || !opener) return;
         try {

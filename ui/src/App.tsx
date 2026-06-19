@@ -409,6 +409,14 @@ export function App() {
         passwordKind: kind,
         targetId: target,
         onFrame,
+        // Керований чисто завершив сесію (BYE) — миттєво в книгу, не чекаючи watchdog кадрів.
+        onClose: () => {
+          decoderRef.current?.close();
+          decoderRef.current = null;
+          startedRef.current = false;
+          setSession(null);
+          setControl(true);
+        },
       });
       setSession(s);
       setTargetId(target);

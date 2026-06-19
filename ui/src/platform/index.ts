@@ -45,6 +45,9 @@ export interface ConnectOpts {
   targetId: string;
   /** Викликається на кожен розшифрований H.264 access unit (Annex-B). */
   onFrame: (h264: Uint8Array) => void;
+  /** Сесія завершилась ПІСЛЯ встановлення (керований надіслав BYE, обрив datachannel/ICE).
+   *  Дозволяє миттєво повернутись у книгу, не чекаючи watchdog кадрів. */
+  onClose?: (reason: string) => void;
 }
 
 export interface SessionHandle {
