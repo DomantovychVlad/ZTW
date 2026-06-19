@@ -6,7 +6,7 @@ pub use win::{get_text, sequence, set_text};
 
 #[cfg(windows)]
 mod win {
-    use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND};
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber,
         OpenClipboard, SetClipboardData,
@@ -67,14 +67,19 @@ mod win {
                 EmptyClipboard().ok()?;
                 let bytes = wide.len() * 2;
                 let h = GlobalAlloc(GMEM_MOVEABLE, bytes).ok()?;
+                // h треба звільнити самим, доки власність НЕ перейшла до буфера ОС.
                 let p = GlobalLock(h) as *mut u16;
                 if p.is_null() {
+                    let _ = GlobalFree(Some(h));
                     return None;
                 }
                 std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
                 let _ = GlobalUnlock(h);
-                SetClipboardData(CF_UNICODETEXT, Some(HANDLE(h.0))).ok()?;
-                Some(())
+                if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(h.0))).is_err() {
+                    let _ = GlobalFree(Some(h)); // власність НЕ перейшла — звільняємо
+                    return None;
+                }
+                Some(()) // успіх: власність h перейшла до буфера ОС
             })()
             .is_some();
             let _ = CloseClipboard();

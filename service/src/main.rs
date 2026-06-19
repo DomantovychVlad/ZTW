@@ -722,7 +722,9 @@ mod svc {
 
         use zortilwatch_core::blank::Blanker;
         use zortilwatch_core::capture::dxgi::{monitors_dxgi, start_primary_dxgi};
-        use zortilwatch_core::crypto::{StreamOpener, StreamSealer, STREAM_LABEL_INPUT_C2H};
+        use zortilwatch_core::crypto::{
+            StreamOpener, StreamSealer, STREAM_LABEL_INPUT_C2H, STREAM_LABEL_MEDIA_H2C,
+        };
         use zortilwatch_core::encode::H264Encoder;
         use zortilwatch_core::input::{self, InputEvent};
         use zortilwatch_core::media::{Chunker, DEFAULT_MAX_PAYLOAD};
@@ -730,7 +732,6 @@ mod svc {
         use zortilwatch_core::session::{Handshake, SessionMessage};
         use zortilwatch_core::signal::{ClientMsg, ServerMsg, SignalClient};
 
-        const MEDIA_LABEL: &[u8] = b"zortilwatch media h2c v1"; // напрям керований->пульт
         const SESSION_BYE: &[u8] = b"ZW-BYE-1"; // пульт чисто завершив сесію (як у Tier A)
 
         /// Конфіг пристрою для host-стріму (%ProgramData%\ZortilWatch\device.json).
@@ -1092,7 +1093,7 @@ mod svc {
             let (cap, rx) = start_primary_dxgi().map_err(|e| e.to_string())?;
             let mut enc: Option<H264Encoder> = None;
             let mut chunker = Chunker::new(DEFAULT_MAX_PAYLOAD);
-            let mut sealer = StreamSealer::new(&est.key, MEDIA_LABEL);
+            let mut sealer = StreamSealer::new(&est.key, STREAM_LABEL_MEDIA_H2C);
             let input_opener = StreamOpener::new(&est.key, STREAM_LABEL_INPUT_C2H); // ввід пульт→host
             let mut queue: VecDeque<Vec<u8>> = VecDeque::new();
             let mut chan_opt = Some(est.chan);

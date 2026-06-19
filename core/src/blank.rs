@@ -33,6 +33,50 @@ mod win {
         DefWindowProcW(h, m, wp, lp)
     }
 
+    /// Створити чорний topmost-оверлей на весь віртуальний екран (WDA_EXCLUDEFROMCAPTURE —
+    /// людина бачить чорне, пульт бачить екран) і опублікувати HWND у `hw`. false при невдачі.
+    unsafe fn create_overlay(hw: &AtomicIsize) -> bool {
+        let Ok(hinst) = GetModuleHandleW(None) else {
+            return false;
+        };
+        let class = w!("ZW_BLANK_WND");
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(wndproc),
+            hInstance: hinst.into(),
+            lpszClassName: class,
+            hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+            ..Default::default()
+        };
+        RegisterClassW(&wc); // повторна реєстрація дає помилку — байдуже, клас уже є
+        let (x, y) = (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+        );
+        let (w_, h_) = (
+            GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1),
+        );
+        let Ok(win) = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+            class,
+            w!("ZortilWatch"),
+            WS_POPUP | WS_VISIBLE,
+            x,
+            y,
+            w_,
+            h_,
+            None,
+            None,
+            Some(hinst.into()),
+            None,
+        ) else {
+            return false;
+        };
+        let _ = SetWindowDisplayAffinity(win, WDA_EXCLUDEFROMCAPTURE);
+        hw.store(win.0 as isize, Ordering::Release);
+        true
+    }
+
     /// Активне затемнення; `hide()` (або Drop) прибирає вікно.
     pub struct Blanker {
         hwnd: Arc<AtomicIsize>,
@@ -40,56 +84,26 @@ mod win {
     }
 
     impl Blanker {
-        /// Показати чорний оверлей. Вікно з'являється асинхронно (мс).
+        /// Показати чорний оверлей. БЛОКУЄ, доки потік не опублікує HWND (або не завершиться
+        /// на помилці) — інакше гонка `close_join` зі `store` давала deadlock (swap бачив 0,
+        /// WM_CLOSE не доставлявся, join() висів вічно → чорний екран переживав сесію).
         pub fn show() -> Self {
             let hwnd = Arc::new(AtomicIsize::new(0));
             let hw = hwnd.clone();
+            let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
             let thread = std::thread::spawn(move || unsafe {
-                let Ok(hinst) = GetModuleHandleW(None) else {
-                    return;
-                };
-                let class = w!("ZW_BLANK_WND");
-                let wc = WNDCLASSW {
-                    lpfnWndProc: Some(wndproc),
-                    hInstance: hinst.into(),
-                    lpszClassName: class,
-                    hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
-                    ..Default::default()
-                };
-                RegisterClassW(&wc); // повторна реєстрація дає помилку — байдуже, клас уже є
-                let (x, y) = (
-                    GetSystemMetrics(SM_XVIRTUALSCREEN),
-                    GetSystemMetrics(SM_YVIRTUALSCREEN),
-                );
-                let (w_, h_) = (
-                    GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1),
-                    GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1),
-                );
-                let Ok(win) = CreateWindowExW(
-                    WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                    class,
-                    w!("ZortilWatch"),
-                    WS_POPUP | WS_VISIBLE,
-                    x,
-                    y,
-                    w_,
-                    h_,
-                    None,
-                    None,
-                    Some(hinst.into()),
-                    None,
-                ) else {
-                    return;
-                };
-                // Ключ: вікно НЕ потрапляє в захоплення — пульт бачить екран, людина — чорне.
-                let _ = SetWindowDisplayAffinity(win, WDA_EXCLUDEFROMCAPTURE);
-                hw.store(win.0 as isize, Ordering::Release);
+                let created = create_overlay(&hw);
+                let _ = ready_tx.send(()); // завжди сигналимо готовність (успіх чи ні)
+                if !created {
+                    return; // вікна нема — message pump не потрібен
+                }
                 let mut msg = MSG::default();
                 while GetMessageW(&mut msg, None, 0, 0).as_bool() {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 }
             });
+            let _ = ready_rx.recv(); // дочекатись публікації HWND (або виходу потоку)
             Blanker {
                 hwnd,
                 thread: Some(thread),
