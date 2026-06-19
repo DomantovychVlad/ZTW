@@ -141,7 +141,7 @@ export function registerRoutes(app: FastifyInstance, registry: Registry): void {
       // "no_helper" — MAC є, але жодного помічника в тій мережі зараз немає.
       wake: !d.macAddress
         ? "unsupported"
-        : registry.helpersOnNetwork(d.lastWanIp, d.publicId) > 0
+        : registry.helpersOnNetwork(d.lastWanIp, d.publicId, d.accountId) > 0
           ? "ready"
           : "no_helper",
     }));

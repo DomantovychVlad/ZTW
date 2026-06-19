@@ -37,6 +37,8 @@ interface SlotEntry {
   wanIp?: string;
   /** Чи може цей пристрій будити інші (надсилати магічний пакет). */
   canWake: boolean;
+  /** Орендар-власник пристрою — WoL добирає помічника ЛИШЕ в межах того ж акаунта. */
+  accountId?: string;
 }
 
 /** Підсумок розсилки магічного пакета (PRD 5.9). */
@@ -87,7 +89,7 @@ export class Registry {
     deviceId: string,
     kind: DeviceKind,
     conn: Connection,
-    meta: { wanIp?: string; canWake?: boolean } = {},
+    meta: { wanIp?: string; canWake?: boolean; accountId?: string } = {},
     now = Date.now(),
   ): void {
     const slots = this.devices.get(deviceId) ?? {};
@@ -103,42 +105,58 @@ export class Registry {
       sessions: existing?.sessions ?? new Set(),
       wanIp: meta.wanIp,
       canWake: meta.canWake ?? false,
+      accountId: meta.accountId,
     };
     this.devices.set(deviceId, slots);
   }
 
-  /** Скільки помічників (canWake) онлайн у мережі `wanIp`, окрім `exceptId`. (PRD 5.9) */
-  helpersOnNetwork(wanIp: string | null | undefined, exceptId: string): number {
+  /** Чи є слот валідним WoL-помічником для цілі: вміє будити, та сама мережа І той самий
+   *  орендар (без accountId цілі — НЕ помічник, fail-closed проти крос-тенант пробудження). */
+  private isHelperFor(
+    e: SlotEntry | undefined,
+    wanIp: string,
+    accountId: string | null | undefined,
+  ): boolean {
+    return !!e && e.canWake && e.wanIp === wanIp && !!accountId && e.accountId === accountId;
+  }
+
+  /** Скільки помічників (canWake) того ж акаунта онлайн у мережі `wanIp`, окрім `exceptId`. (PRD 5.9) */
+  helpersOnNetwork(
+    wanIp: string | null | undefined,
+    exceptId: string,
+    accountId: string | null | undefined,
+  ): number {
     if (!wanIp) return 0;
     let n = 0;
     for (const [id, slots] of this.devices) {
       if (id === exceptId) continue;
-      const helper = (["host", "controller"] as const).some((k) => {
-        const e = slots[k];
-        return e?.canWake && e.wanIp === wanIp;
-      });
+      const helper = (["host", "controller"] as const).some((k) =>
+        this.isHelperFor(slots[k], wanIp, accountId),
+      );
       if (helper) n++;
     }
     return n;
   }
 
   /**
-   * Розіслати магічний пакет на `mac` через помічників у мережі `targetWanIp`
+   * Розіслати магічний пакет на `mac` через помічників ТОГО Ж АКАУНТА в мережі `targetWanIp`
    * (PRD 5.9). `mac` null => пристрій не повідомив підтримку WoL ("unsupported").
-   * Один пристрій = один пакет (дедуп за deviceId), ціль виключаємо.
+   * Один пристрій = один пакет (дедуп за deviceId), ціль виключаємо. Крос-тенант пробудження
+   * заблоковано: чужий пристрій у тій самій фізичній мережі помічником не стає.
    */
   dispatchWake(
     targetId: string,
     mac: string | null | undefined,
     targetWanIp: string | null | undefined,
+    accountId: string | null | undefined,
   ): { status: WakeOutcome; helpers: number } {
     if (!mac) return { status: "unsupported", helpers: 0 };
     const sent = new Set<string>();
     for (const [id, slots] of this.devices) {
-      if (id === targetId || sent.has(id)) continue;
+      if (id === targetId || sent.has(id) || !targetWanIp) continue;
       const conn = (["host", "controller"] as const)
         .map((k) => slots[k])
-        .find((e) => e?.canWake && e.wanIp === targetWanIp)?.conn;
+        .find((e) => this.isHelperFor(e, targetWanIp, accountId))?.conn;
       if (conn) {
         conn.send({ v: 1, type: "wake_dispatch", mac });
         sent.add(id);

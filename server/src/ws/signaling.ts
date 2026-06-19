@@ -90,7 +90,11 @@ export function registerSignaling(app: FastifyInstance): Registry {
         if (deviceId && clientKind) registry.offline(deviceId, clientKind, conn);
         deviceId = msg.deviceId;
         clientKind = msg.clientKind;
-        registry.online(deviceId, msg.clientKind, conn, { wanIp, canWake: msg.canWake });
+        registry.online(deviceId, msg.clientKind, conn, {
+          wanIp,
+          canWake: msg.canWake,
+          accountId: device.accountId, // WoL добирає помічника лише в межах того ж акаунта
+        });
         // Запам'ятати MAC + мережу для Wake-on-LAN (PRD 5.9); збій БД не критичний.
         void updateDeviceWol(deviceId, msg.mac, wanIp ?? null);
         conn.send({ v: 1, type: "register_ok", deviceId, serverTime: Date.now(), rid: msg.rid });
@@ -160,14 +164,16 @@ export function registerSignaling(app: FastifyInstance): Registry {
           // тож MAC і остання мережа — з БД; помічники добираються за живою WAN-IP.
           let mac: string | null = null;
           let targetWanIp: string | null = null;
+          let targetAccountId: string | null = null;
           try {
             const target = await findDeviceByPublicId(msg.targetId);
             mac = target?.macAddress ?? null;
             targetWanIp = target?.lastWanIp ?? null;
+            targetAccountId = target?.accountId ?? null;
           } catch (err) {
             app.log.warn({ err }, "wake lookup failed");
           }
-          const res = registry.dispatchWake(msg.targetId, mac, targetWanIp);
+          const res = registry.dispatchWake(msg.targetId, mac, targetWanIp, targetAccountId);
           conn.send({ v: 1, type: "wake_result", status: res.status, helpers: res.helpers, rid: msg.rid });
           if (res.status === "dispatched") audit("wake_dispatched", msg.targetId, deviceId);
           break;

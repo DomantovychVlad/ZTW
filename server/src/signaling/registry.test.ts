@@ -180,6 +180,35 @@ describe("Registry — потік підключення", () => {
   });
 });
 
+describe("Registry — Wake-on-LAN (крос-тенант ізоляція)", () => {
+  it("помічник того ж акаунта в тій самій мережі будить ціль", () => {
+    const r = new Registry();
+    const helper = new MockConn();
+    r.online("200000002", "host", helper, { wanIp: "1.2.3.4", canWake: true, accountId: "acc-A" });
+    const res = r.dispatchWake("100000001", "AA:BB", "1.2.3.4", "acc-A");
+    expect(res).toEqual({ status: "dispatched", helpers: 1 });
+    expect(helper.ofType("wake_dispatch")[0]).toMatchObject({ mac: "AA:BB" });
+    expect(r.helpersOnNetwork("1.2.3.4", "100000001", "acc-A")).toBe(1);
+  });
+
+  it("пристрій ЧУЖОГО акаунта в тій самій мережі помічником НЕ стає", () => {
+    const r = new Registry();
+    const intruder = new MockConn();
+    r.online("200000002", "host", intruder, { wanIp: "1.2.3.4", canWake: true, accountId: "acc-B" });
+    const res = r.dispatchWake("100000001", "AA:BB", "1.2.3.4", "acc-A");
+    expect(res).toEqual({ status: "no_helper", helpers: 0 });
+    expect(intruder.ofType("wake_dispatch")).toHaveLength(0);
+    expect(r.helpersOnNetwork("1.2.3.4", "100000001", "acc-A")).toBe(0);
+  });
+
+  it("без MAC -> unsupported; невідомий акаунт цілі -> no_helper", () => {
+    const r = new Registry();
+    r.online("200000002", "host", new MockConn(), { wanIp: "1.2.3.4", canWake: true, accountId: "acc-A" });
+    expect(r.dispatchWake("100000001", null, "1.2.3.4", "acc-A").status).toBe("unsupported");
+    expect(r.dispatchWake("100000001", "AA:BB", "1.2.3.4", null).status).toBe("no_helper");
+  });
+});
+
 describe("Registry — сліпий релей", () => {
   function ready() {
     const r = new Registry({ makeSessionId: fixedIds() });
